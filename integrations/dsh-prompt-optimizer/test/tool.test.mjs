@@ -39,10 +39,16 @@ function jsonResponse(status, body) {
 function makeHarness() {
   const calls = [];
   let registered;
+  let registeredCommand;
   const ctx = {
     tools: {
       register(definition) {
         registered = definition;
+      },
+    },
+    commands: {
+      register(definition) {
+        registeredCommand = definition;
       },
     },
     get(service) {
@@ -61,6 +67,9 @@ function makeHarness() {
     calls,
     get registered() {
       return registered;
+    },
+    get registeredCommand() {
+      return registeredCommand;
     },
   };
 }
@@ -86,7 +95,7 @@ function stubFetch(handler) {
 
 test('plugin exports the loader contract and registers one tool', () => {
   assert.equal(pluginName, 'dsh-prompt-optimizer');
-  assert.deepEqual(inject, ['tools']);
+  assert.deepEqual(inject, ['tools', 'commands']);
   const harness = makeHarness();
   apply(harness.ctx, { provider: 'jev', validation: 'strict', credentialsRef: 'COMMANDCODE_API_KEY' });
   assert.ok(harness.registered, 'tool must be registered');
@@ -218,4 +227,83 @@ test('environment variables take precedence over row config', async () => {
   apply(harness.ctx, { jev: { baseUrl: 'https://from-row.example/v1' } });
   await harness.registered.execute({ prompt: 'hello world' }, {});
   assert.equal(requestedUrl, 'https://from-env.example/v1/systemone');
+});
+
+test('registers the optimize-prompt command bridge for the composer button', () => {
+  const harness = makeHarness();
+  apply(harness.ctx, {});
+  assert.ok(harness.registeredCommand, 'command must be registered');
+  assert.equal(harness.registeredCommand.name, 'optimize-prompt');
+  assert.equal(harness.registeredCommand.recordInput, false);
+  assert.equal(typeof harness.registeredCommand.handler, 'function');
+});
+
+test('command handler returns structured JSON for the button path', async () => {
+  stubFetch(() => jsonResponse(200, JEV_SHAPED_RESPONSE));
+  const harness = makeHarness();
+  apply(harness.ctx, {});
+
+  const result = await harness.registeredCommand.handler({
+    commandId: 'c1',
+    agent: {},
+    rawInput: ' ' + JSON.stringify({ prompt: 'write a haiku', response: 'json' }),
+    attachments: [],
+    signal: new AbortController().signal,
+  });
+
+  assert.equal(result.kind, 'success');
+  const value = JSON.parse(result.text);
+  assert.ok(value.optimized_prompt.includes('write a haiku'));
+  assert.equal(value.provider, 'jev');
+  assert.ok(Array.isArray(value.changes));
+});
+
+test('command handler returns readable text for plain prompt input', async () => {
+  stubFetch(() => jsonResponse(200, JEV_SHAPED_RESPONSE));
+  const harness = makeHarness();
+  apply(harness.ctx, {});
+
+  const result = await harness.registeredCommand.handler({
+    commandId: 'c2',
+    agent: {},
+    rawInput: ' write a haiku about autumn ',
+    attachments: [],
+    signal: new AbortController().signal,
+  });
+
+  assert.equal(result.kind, 'success');
+  assert.ok(result.text.includes('Optimized prompt:'));
+  assert.ok(result.text.includes('write a haiku about autumn'));
+});
+
+test('command handler surfaces failures as error results without secrets', async () => {
+  stubFetch(() => jsonResponse(401, { error: { message: 'invalid key' } }));
+  const harness = makeHarness();
+  apply(harness.ctx, {});
+
+  const result = await harness.registeredCommand.handler({
+    commandId: 'c3',
+    agent: {},
+    rawInput: ' hello world',
+    attachments: [],
+    signal: new AbortController().signal,
+  });
+
+  assert.equal(result.kind, 'error');
+  assert.match(result.text, /optimize-prompt failed/);
+  assert.ok(!result.text.includes('test-key'));
+});
+
+test('command handler rejects empty input', async () => {
+  const harness = makeHarness();
+  apply(harness.ctx, {});
+  const result = await harness.registeredCommand.handler({
+    commandId: 'c4',
+    agent: {},
+    rawInput: '   ',
+    attachments: [],
+    signal: new AbortController().signal,
+  });
+  assert.equal(result.kind, 'error');
+  assert.match(result.text, /provide the prompt/);
 });

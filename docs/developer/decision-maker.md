@@ -168,6 +168,17 @@ optimize_prompt(prompt, context?, target_model?, constraints?) →
     provider, model, validation, decision_latency_ms }
 ```
 
+**Composer button + `/optimize-prompt` command.** The bundle also ships a
+client half (`client.js`) that registers a wand button into the composer tool
+row (`conversation.input.right`, directly before the send action). Clicking it
+optimizes the current composer draft and replaces the draft with the enhanced
+prompt, then shows the change/assumption/warning summary as a composer notice.
+The host side of the bridge is a regular harness command (`optimize-prompt`,
+also usable from the slash menu), executed through `remote.commands.execute`;
+its `recordInput: false` keeps the prompt payload out of the session log. After
+installing or updating the bundle, refresh the Web UI page once so the browser
+picks up the client artifact.
+
 Non-secret settings may be placed in the bundle's `cordis.patch.yml` `config:`
 block (`provider`, `validation`, `jev.baseUrl`, `laya.model`, `timeoutMs`,
 `retries`, `credentialsRef`, …). Environment variables take precedence

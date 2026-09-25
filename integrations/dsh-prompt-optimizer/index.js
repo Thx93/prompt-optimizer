@@ -17,9 +17,10 @@
  * - disable or replace with `plugin_manager set_plugin/remove_bundle`
  */
 const name = 'dsh-prompt-optimizer';
-const inject = ['tools'];
+const inject = ['tools', 'commands'];
 
 const TOOL_NAME = 'optimize_prompt';
+const COMMAND_NAME = 'optimize-prompt';
 const TOOL_TIMEOUT_MS = 120_000;
 const MAX_PROMPT_CHARS = 64_000;
 const MAX_CONTEXT_CHARS = 16_000;
@@ -122,6 +123,63 @@ function normalizeConstraints(value) {
   return items.length > 0 ? items : undefined;
 }
 
+/** Best-effort machine-readable error code without leaking content. */
+function errorCode(error) {
+  const cause = error && error.cause ? error.cause : undefined;
+  return (
+    (cause && cause.code ? String(cause.code) : undefined) ||
+    (error && error.code ? String(error.code) : 'unexpected_error')
+  );
+}
+
+/** Human-readable result rendering (shared by tool output and command text). */
+function resultText(value) {
+  const parts = [`Optimized prompt:\n\n${value.optimized_prompt}`];
+  if (value.changes && value.changes.length > 0) {
+    parts.push(`Changes:\n${value.changes.map((c) => `- ${c}`).join('\n')}`);
+  }
+  if (value.assumptions && value.assumptions.length > 0) {
+    parts.push(`Assumptions:\n${value.assumptions.map((a) => `- ${a}`).join('\n')}`);
+  }
+  if (value.warnings && value.warnings.length > 0) {
+    parts.push(`Warnings:\n${value.warnings.map((w) => `- ${w}`).join('\n')}`);
+  }
+  parts.push(
+    `(decision-maker: ${value.provider} · ${value.model} · ${value.decision_latency_ms} ms · validation: ${value.validation})`
+  );
+  return parts.join('\n\n');
+}
+
+/**
+ * Parse the command's raw input: a JSON request object (button path, may set
+ * `response: 'json'`) or plain prompt text (slash-command path).
+ */
+function parseCommandInput(rawInput) {
+  const text = String(rawInput ?? '').trim();
+  if (text.length === 0) throw new Error('optimize-prompt: provide the prompt to optimize');
+  if (text.length > MAX_PROMPT_CHARS + MAX_CONTEXT_CHARS + 32_000) {
+    throw new Error('optimize-prompt: input is too large');
+  }
+  if (text.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed && typeof parsed === 'object' && typeof parsed.prompt === 'string') {
+        return {
+          prompt: parsed.prompt,
+          context: typeof parsed.context === 'string' ? parsed.context : undefined,
+          targetModel: typeof parsed.target_model === 'string' ? parsed.target_model : undefined,
+          constraints: normalizeConstraints(parsed.constraints),
+          instructions: typeof parsed.instructions === 'string' ? parsed.instructions : undefined,
+          response: parsed.response === 'json' ? 'json' : 'text',
+        };
+      }
+    } catch {
+      /* not JSON after all: treat as plain prompt text */
+    }
+  }
+  return { prompt: text, response: 'text' };
+}
+
 function apply(ctx, config = {}) {
   const rowConfig = config && typeof config === 'object' ? config : {};
   let runtimePromise;
@@ -151,6 +209,35 @@ function apply(ctx, config = {}) {
       });
     }
     return runtimePromise;
+  }
+
+  /** Shared optimize path (tool execute + command handler). */
+  async function runOptimize(request) {
+    const prompt = requireString(request.prompt, 'prompt', MAX_PROMPT_CHARS);
+    if (!prompt) throw new Error('prompt must be a non-empty string');
+    const context = requireString(request.context, 'context', MAX_CONTEXT_CHARS);
+    const targetModel = requireString(request.targetModel, 'target_model', 200);
+    const constraints = normalizeConstraints(request.constraints);
+
+    const { core, decisionConfig } = await runtime();
+    const provider = core.createDecisionMakerProvider(decisionConfig);
+    const optimizer = new core.PromptOptimizer({
+      provider,
+      validation: decisionConfig.validation,
+      maxStateChars: decisionConfig.maxStateChars,
+    });
+
+    const result = await optimizer.optimize({ prompt, context, targetModel, constraints, signal: request.signal });
+    return {
+      optimized_prompt: result.optimized_prompt,
+      changes: result.changes,
+      assumptions: result.assumptions,
+      warnings: result.warnings,
+      provider: result.meta ? result.meta.provider : decisionConfig.provider,
+      model: result.meta ? result.meta.model : '',
+      validation: result.meta ? result.meta.validation : decisionConfig.validation,
+      decision_latency_ms: result.meta && result.meta.decisionLatencyMs ? result.meta.decisionLatencyMs : 0,
+    };
   }
 
   ctx.tools.register({
@@ -210,22 +297,7 @@ function apply(ctx, config = {}) {
           decision_latency_ms: { type: 'number' },
         },
       },
-      render: (_args, value) => {
-        const parts = [`Optimized prompt:\n\n${value.optimized_prompt}`];
-        if (value.changes && value.changes.length > 0) {
-          parts.push(`Changes:\n${value.changes.map((c) => `- ${c}`).join('\n')}`);
-        }
-        if (value.assumptions && value.assumptions.length > 0) {
-          parts.push(`Assumptions:\n${value.assumptions.map((a) => `- ${a}`).join('\n')}`);
-        }
-        if (value.warnings && value.warnings.length > 0) {
-          parts.push(`Warnings:\n${value.warnings.map((w) => `- ${w}`).join('\n')}`);
-        }
-        parts.push(
-          `(decision-maker: ${value.provider} · ${value.model} · ${value.decision_latency_ms} ms · validation: ${value.validation})`
-        );
-        return [{ type: 'text', text: parts.join('\n\n') }];
-      },
+      render: (_args, value) => [{ type: 'text', text: resultText(value) }],
     },
     timeoutMs: TOOL_TIMEOUT_MS,
     async execute(args, exec) {
@@ -235,34 +307,42 @@ function apply(ctx, config = {}) {
       const targetModel = requireString(args.target_model, 'target_model', 200);
       const constraints = normalizeConstraints(args.constraints);
 
-      const { core, decisionConfig } = await runtime();
-      const provider = core.createDecisionMakerProvider(decisionConfig);
-      const optimizer = new core.PromptOptimizer({
-        provider,
-        validation: decisionConfig.validation,
-        maxStateChars: decisionConfig.maxStateChars,
-      });
-
       const signal = exec && exec.signal && typeof exec.signal.addEventListener === 'function' ? exec.signal : undefined;
       try {
-        const result = await optimizer.optimize({ prompt, context, targetModel, constraints, signal });
-        return {
-          optimized_prompt: result.optimized_prompt,
-          changes: result.changes,
-          assumptions: result.assumptions,
-          warnings: result.warnings,
-          provider: result.meta ? result.meta.provider : decisionConfig.provider,
-          model: result.meta ? result.meta.model : '',
-          validation: result.meta ? result.meta.validation : decisionConfig.validation,
-          decision_latency_ms: result.meta && result.meta.decisionLatencyMs ? result.meta.decisionLatencyMs : 0,
-        };
+        return await runOptimize({ prompt, context, targetModel, constraints, signal });
       } catch (error) {
         // Surface a concise, content-free error: codes and provider names only.
-        const cause = error && error.cause ? error.cause : undefined;
-        const code =
-          (cause && cause.code ? String(cause.code) : undefined) ||
-          (error && error.code ? String(error.code) : 'unexpected_error');
-        throw new Error(`optimize_prompt failed (${code}): ${error && error.message ? error.message : 'unknown error'}`);
+        throw new Error(`optimize_prompt failed (${errorCode(error)}): ${error && error.message ? error.message : 'unknown error'}`);
+      }
+    },
+  });
+
+  /**
+   * Host command — the bridge the composer button calls through
+   * `remote.commands.execute`. `rawInput` is the prompt itself or a JSON
+   * request object (the button sends JSON with `"response": "json"`).
+   * `recordInput: false` keeps the prompt payload out of the session log.
+   */
+  ctx.commands.register({
+    name: COMMAND_NAME,
+    description:
+      'Optimize a prompt with the configured decision-maker (JEV/Laya) and show the enhanced version. ' +
+      'Used by the composer button; also available as /' + COMMAND_NAME + ' <prompt>.',
+    input: { hint: 'the prompt to optimize' },
+    recordInput: false,
+    async handler(invocation) {
+      try {
+        const request = parseCommandInput(invocation.rawInput);
+        const result = await runOptimize(request);
+        if (request.response === 'json') {
+          return { kind: 'success', text: JSON.stringify(result) };
+        }
+        return { kind: 'success', text: resultText(result) };
+      } catch (error) {
+        return {
+          kind: 'error',
+          text: `optimize-prompt failed (${errorCode(error)}): ${error && error.message ? error.message : 'unknown error'}`,
+        };
       }
     },
   });
