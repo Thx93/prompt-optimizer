@@ -83,6 +83,28 @@ Prompts can start from manual writing, templates, local imports, or sources such
 
 For detailed usage instructions, please refer to the [Image Mode Documentation](docs/image-mode.md)
 
+### Decision-Maker Prompt Optimization (JEV / Laya) + DeepSeek Harness Plugin
+
+This fork adds a decision-driven enhancement pipeline in `@prompt-optimizer/core`
+(`packages/core/src/services/decision-maker` + `services/optimization`):
+
+- 🧠 **Decision-maker providers**: `JEVProvider` (TypeSafe "System One" model via
+  the Command Code provider API) and `LayaProvider` (local `laya-serve`), behind
+  one clean `DecisionMakerProvider` interface — selectable via
+  `PROMPT_OPTIMIZER_PROVIDER=jev|laya`
+- 🧩 **Structured optimization result**: validated `PromptOptimizationResult`
+  (`optimized_prompt`, `changes`, `assumptions`, `warnings`, `meta`) — the
+  original request and every constraint are preserved verbatim by construction
+  and re-checked by calibrated decision gates
+- 🔌 **DeepSeek Harness plugin**: the `optimize_prompt` tool
+  (`integrations/dsh-prompt-optimizer/`), installable as a harness bundle with
+  no daemon and no ports
+- 🔒 **Safe by default**: secrets only from env/credential store, bounded
+  timeouts/retries/size caps, no model-generated code execution
+
+See [docs/developer/decision-maker.md](docs/developer/decision-maker.md) for
+architecture, setup (JEV/Laya/harness plugin), testing and security notes.
+
 ## Quick Start
 
 ### 1. Use Online Version (Recommended)

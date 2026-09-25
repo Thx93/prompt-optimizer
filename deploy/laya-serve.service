@@ -1,0 +1,33 @@
+# Optional systemd unit for the Laya decision-maker (local provider).
+#
+# Install (verified on Ubuntu 24.04):
+#   sudo cp deploy/laya-serve.service /etc/systemd/system/laya-serve.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now laya-serve.service
+#
+# The service binds 127.0.0.1:8787 only. It is needed exclusively when
+# PROMPT_OPTIMIZER_PROVIDER=laya; the default JEV provider does not use it.
+[Unit]
+Description=Laya decision-model server (convaiinnovations/laya, CPU)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Environment=HF_HOME=/root/Prompt-Enhancer/.cache/huggingface
+Environment=LAYA_HOST=127.0.0.1
+Environment=LAYA_PORT=8787
+Environment=LAYA_DEVICE=cpu
+Environment=LAYA_THREADS=2
+Environment=LAYA_MODELS=english
+Environment=LAYA_PRELOAD=1
+WorkingDirectory=/root/Prompt-Enhancer
+ExecStart=/root/Prompt-Enhancer/.venv-laya/bin/laya-serve
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:/var/log/laya-serve/console.log
+StandardError=append:/var/log/laya-serve/console.log
+
+[Install]
+WantedBy=multi-user.target
