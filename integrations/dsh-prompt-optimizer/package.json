@@ -1,0 +1,11 @@
+{
+  "name": "@local/dsh-prompt-optimizer",
+  "version": "1.0.0",
+  "description": "DeepSeek Harness tool plugin: optimize_prompt, backed by the prompt-optimizer decision-maker pipeline (JEV / Laya)",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./index.js" },
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" }
+  }
+}

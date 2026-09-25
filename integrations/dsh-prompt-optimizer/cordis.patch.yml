@@ -1,0 +1,29 @@
+# Plugin row for the DeepSeek Harness.
+#
+# Non-secret configuration may be set here as FALLBACK defaults: environment
+# variables take precedence (e.g. PROMPT_OPTIMIZER_PROVIDER=laya switches the
+# provider at runtime); fields present here fill what the environment leaves
+# unset (see docs/developer/decision-maker.md).
+#
+# Secrets (API keys) NEVER belong in this file. The plugin resolves them from
+# the process environment first (JEV_API_KEY / COMMANDCODE_API_KEY /
+# TYPESAFE_API_KEY, LAYA_API_KEY) and otherwise from the harness credential
+# store via the ref named below.
+- insert:
+    - id: prompt-optimizer
+      name: '@local/dsh-prompt-optimizer'
+      config:
+        # Decision-maker backend: jev | laya
+        provider: jev
+        # Output validation: strict | basic | off
+        validation: strict
+        # Ref in the harness credential store used when no env key is set.
+        credentialsRef: COMMANDCODE_API_KEY
+        # jev:
+        #   baseUrl: https://api.commandcode.ai/provider/v1
+        #   model: typesafe/jev
+        # laya:
+        #   baseUrl: http://127.0.0.1:8787
+        #   model: english
+        # timeoutMs: 30000
+        # retries: 2
