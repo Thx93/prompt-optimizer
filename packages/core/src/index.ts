@@ -294,3 +294,7 @@ export { VariableExtractionService, createVariableExtractionService } from './se
 export * from './services/variable-value-generation/types'
 export * from './services/variable-value-generation/errors'
 export { VariableValueGenerationService, createVariableValueGenerationService } from './services/variable-value-generation/service'
+
+// 决策式提示词优化（Decision-maker providers + optimization pipeline）
+export * from './services/decision-maker/index'
+export * from './services/optimization/index'

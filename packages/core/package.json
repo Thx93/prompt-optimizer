@@ -11,11 +11,16 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "require": "./dist/index.cjs"
+    },
+    "./decision-maker": {
+      "types": "./dist/decision-maker.d.ts",
+      "import": "./dist/decision-maker.js",
+      "require": "./dist/decision-maker.cjs"
     }
   },
   "scripts": {
-    "build": "tsup src/index.ts --format cjs,esm --dts",
-    "dev": "tsup src/index.ts --format cjs,esm --dts --watch",
+    "build": "tsup src/index.ts src/decision-maker.ts --format cjs,esm --dts",
+    "dev": "tsup src/index.ts src/decision-maker.ts --format cjs,esm --dts --watch",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
