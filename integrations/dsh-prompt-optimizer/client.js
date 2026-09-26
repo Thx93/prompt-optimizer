@@ -114,10 +114,25 @@ window.__ModuleLoader__.load({
         try {
           const line =
             '/optimize-prompt ' + JSON.stringify({ prompt, response: 'json' });
-          const execution = await pluginCtx.remote.commands.execute(sessionId, line, []);
+          // Remote calls answer with an envelope { ok, value?, error? }; the
+          // value is the CommandExecution { commandId, result }.
+          const envelope = await pluginCtx.remote.commands.execute(sessionId, line, []);
+          if (!envelope || envelope.ok !== true) {
+            const detail =
+              envelope && envelope.error
+                ? `${envelope.error.code || 'remote'}: ${envelope.error.message || ''}`
+                : '';
+            input.notify('error', detail ? `${tr('error')} — ${detail}` : tr('error'));
+            return;
+          }
+          const execution = envelope.value;
           const result = execution && execution.result;
-          if (!result || result.kind !== 'success') {
-            input.notify('error', (result && result.text) || tr('error'));
+          if (!result) {
+            input.notify('error', tr('error'));
+            return;
+          }
+          if (result.kind !== 'success') {
+            input.notify('error', result.text || tr('error'));
             return;
           }
           let value;
@@ -132,7 +147,15 @@ window.__ModuleLoader__.load({
             input.notify('error', tr('error'));
             return;
           }
-          input.setDraft(value.optimized_prompt);
+          try {
+            input.setDraft(value.optimized_prompt);
+          } catch (error) {
+            input.notify(
+              'error',
+              `${tr('error')}: optimized prompt could not be written to the composer — ${error && error.message ? error.message : ''}`
+            );
+            return;
+          }
           const parts = [
             tr('success', {
               changes: (value.changes || []).length,
