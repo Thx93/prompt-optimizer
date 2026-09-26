@@ -60,7 +60,7 @@ const DEFAULTS = {
     baseUrl: 'https://api.commandcode.ai/provider/v1',
     model: 'deepseek/deepseek-v4.1-flash',
     temperature: 0.5,
-    maxTokens: 2_400,
+    maxTokens: 4_000,
     timeoutMs: 60_000,
   },
   jev: {

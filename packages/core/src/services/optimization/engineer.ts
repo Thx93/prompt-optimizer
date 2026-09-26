@@ -31,7 +31,7 @@
  * serve this role — they remain the calibrated decision/validation layer
  * around it.
  */
-import { callChatCompletion } from '../decision-maker/chat-client'
+import { callChatCompletion, type ChatMessage } from '../decision-maker/chat-client'
 import { DecisionMakerError } from '../decision-maker/errors'
 import { promptOptimizationResultSchema, type NormalizedOptimizePromptRequest } from './schema'
 
@@ -119,18 +119,51 @@ export function buildRewriteMessage(request: NormalizedOptimizePromptRequest, hi
 }
 
 /**
+ * Find the balanced top-level JSON object in free text (string-aware), so
+ * prose before/after the object — or braces inside string values — cannot
+ * break extraction. Returns the exact substring or undefined.
+ */
+export function findBalancedObject(text: string, from = 0): string | undefined {
+  const start = text.indexOf('{', from)
+  if (start === -1) return undefined
+  let depth = 0
+  let inString = false
+  let escaped = false
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i]
+    if (inString) {
+      if (escaped) escaped = false
+      else if (ch === '\\') escaped = true
+      else if (ch === '"') inString = false
+      continue
+    }
+    if (ch === '"') inString = true
+    else if (ch === '{') depth++
+    else if (ch === '}') {
+      depth--
+      if (depth === 0) return text.slice(start, i + 1)
+    }
+  }
+  return undefined
+}
+
+/**
  * Extract a JSON object from model output: tolerates code fences and stray
  * prose, but never executes or interprets anything the model produced.
  */
 export function extractJsonObject(text: string): unknown {
   const trimmed = text.trim()
-  const attempts = [trimmed]
+  const attempts: string[] = []
   const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i)
-  if (fenced) attempts.unshift(fenced[1].trim())
-  const firstBrace = trimmed.indexOf('{')
-  const lastBrace = trimmed.lastIndexOf('}')
-  if (firstBrace !== -1 && lastBrace > firstBrace) {
-    attempts.push(trimmed.slice(firstBrace, lastBrace + 1))
+  if (fenced) attempts.push(fenced[1].trim())
+  attempts.push(trimmed)
+  let scanFrom = 0
+  while (true) {
+    const balanced = findBalancedObject(trimmed, scanFrom)
+    if (!balanced) break
+    attempts.push(balanced)
+    scanFrom = trimmed.indexOf('{', scanFrom) + 1
+    if (scanFrom <= 0) break
   }
   for (const candidate of attempts) {
     try {
@@ -225,14 +258,15 @@ export class ChatPromptRewriter implements PromptRewriter {
 
   async rewrite(input: RewriteRequest): Promise<EngineeredPromptResult> {
     const startedAt = Date.now()
+    const messages: ChatMessage[] = [
+      { role: 'system', content: ENGINEER_SYSTEM_PROMPT },
+      { role: 'user', content: buildRewriteMessage(input.request, input.hints) },
+    ]
     const completion = await callChatCompletion({
       url: this.endpoint(),
       apiKey: this.config.apiKey,
       model: this.config.model,
-      messages: [
-        { role: 'system', content: ENGINEER_SYSTEM_PROMPT },
-        { role: 'user', content: buildRewriteMessage(input.request, input.hints) },
-      ],
+      messages,
       temperature: this.config.temperature,
       maxTokens: this.config.maxTokens,
       timeoutMs: this.config.timeoutMs,
@@ -240,7 +274,38 @@ export class ChatPromptRewriter implements PromptRewriter {
       signal: input.signal,
       logger: this.logger,
     })
-    const parsed = extractJsonObject(completion.text)
-    return parseEngineeredResult(parsed, completion.model, Date.now() - startedAt)
+
+    try {
+      const parsed = extractJsonObject(completion.text)
+      return parseEngineeredResult(parsed, completion.model, Date.now() - startedAt)
+    } catch (firstError) {
+      // One bounded self-correction round: models occasionally wrap or truncate
+      // the JSON. Repair cost is capped at one extra completion.
+      this.logger.debug('chat.repair', { reason: (firstError as Error).message })
+      const repair = await callChatCompletion({
+        url: this.endpoint(),
+        apiKey: this.config.apiKey,
+        model: this.config.model,
+        messages: [
+          ...messages,
+          { role: 'assistant', content: completion.text.slice(0, 4_000) },
+          {
+            role: 'user',
+            content:
+              'Your previous reply was not a valid JSON object (it must be one complete JSON object ' +
+              'with keys optimized_prompt, changes, assumptions, warnings, clarifying_questions). ' +
+              'Reply again with ONLY the corrected JSON object — no prose, no code fences.',
+          },
+        ],
+        temperature: 0,
+        maxTokens: this.config.maxTokens,
+        timeoutMs: this.config.timeoutMs,
+        retries: this.config.retries,
+        signal: input.signal,
+        logger: this.logger,
+      })
+      const parsed = extractJsonObject(repair.text)
+      return parseEngineeredResult(parsed, repair.model, Date.now() - startedAt)
+    }
   }
 }

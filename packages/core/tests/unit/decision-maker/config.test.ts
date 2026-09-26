@@ -75,7 +75,7 @@ describe('rewrite (DeepSeek V4.1 Flash) configuration', () => {
     expect(config.rewrite.model).toBe('deepseek/deepseek-v4.1-flash')
     expect(config.rewrite.baseUrl).toBe('https://api.commandcode.ai/provider/v1')
     expect(config.rewrite.temperature).toBe(0.5)
-    expect(config.rewrite.maxTokens).toBe(2_400)
+    expect(config.rewrite.maxTokens).toBe(4_000)
   })
 
   it('honours rewrite overrides and mode switching', () => {

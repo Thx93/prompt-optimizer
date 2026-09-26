@@ -127,7 +127,7 @@ credential store — never from files in this repository.
 | `PROMPT_OPTIMIZER_REWRITE_API_KEY` | — | writer key (falls back to `COMMANDCODE_API_KEY`) |
 | `PROMPT_OPTIMIZER_REWRITE_ENDPOINT` | — | full endpoint override (default `{base}/chat/completions`) |
 | `PROMPT_OPTIMIZER_REWRITE_TEMPERATURE` | `0.5` | writer temperature (0–2) |
-| `PROMPT_OPTIMIZER_REWRITE_MAX_TOKENS` | `2400` | writer output cap |
+| `PROMPT_OPTIMIZER_REWRITE_MAX_TOKENS` | `4000` | writer output cap |
 | `PROMPT_OPTIMIZER_REWRITE_TIMEOUT_MS` | `60000` | writer request timeout |
 | `JEV_API_KEY` | — | JEV key (falls back to `COMMANDCODE_API_KEY`, then `TYPESAFE_API_KEY`) |
 | `JEV_BASE_URL` | `https://api.commandcode.ai/provider/v1` | Command Code provider API |

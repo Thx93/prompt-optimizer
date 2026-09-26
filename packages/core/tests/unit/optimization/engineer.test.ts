@@ -173,3 +173,60 @@ describe('engineer stage', () => {
     expect(error.code).toBe('auth')
   })
 })
+
+describe('engineer robustness: extraction and self-correction', () => {
+  beforeEach(() => vi.unstubAllGlobals())
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('extracts a balanced object despite prose and braces inside strings', () => {
+    const value = { optimized_prompt: 'Use a {curly} template: "x}" end', changes: [] }
+    const text = 'Sure — here is the JSON you asked for:\n' + JSON.stringify(value) + '\nEnjoy!'
+    expect(extractJsonObject(text)).toEqual(value)
+  })
+
+  it('recovers with one self-correction round when the first reply is not JSON', async () => {
+    let call = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(async () => {
+        call++
+        const content =
+          call === 1
+            ? 'Here is your optimized prompt! Let me know if you want changes.'
+            : JSON.stringify({
+                optimized_prompt: 'ROLE: writer\n\nTASK: write it',
+                changes: ['structured it'],
+                assumptions: [],
+                warnings: [],
+                clarifying_questions: [],
+              })
+        return new Response(JSON.stringify({ model: 'deepseek/deepseek-v4.1-flash', choices: [{ message: { content } }] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      })
+    )
+
+    const rewriter = new ChatPromptRewriter(rewriterConfig)
+    const result = await rewriter.rewrite({ request: normalize({ prompt: 'write it' }) })
+    expect(result.optimized_prompt).toContain('ROLE: writer')
+    expect(call).toBe(2) // exactly one repair round
+  })
+
+  it('still fails when the repair round is also malformed', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(async () =>
+        new Response(JSON.stringify({ model: 'm', choices: [{ message: { content: 'still not json' } }] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      )
+    )
+    const rewriter = new ChatPromptRewriter(rewriterConfig)
+    const error = await rewriter
+      .rewrite({ request: normalize({ prompt: 'x' }) })
+      .catch((e) => e as DecisionMakerError)
+    expect(error.code).toBe('malformed_response')
+  })
+})
