@@ -136,11 +136,11 @@ export function buildValidationQuestions(): DecisionQuestion[] {
       key: 'no_new_requirements',
       type: 'noul',
       instructions:
-        'Compare [Original request] and [Optimized prompt] in the state. Does the optimized prompt change the TASK SCOPE — different subject, audience, deliverable, or success criteria — compared with the original request? ' +
-        'Added style, tone, role framing, output-structure suggestions or general good-practice guidance do NOT count: only a real change of what is being asked counts.',
+        'Compare [Original request] and [Optimized prompt] in the state. IGNORE all added role, audience, tone and output-format framing — that kind of prompt-engineering scaffolding is EXPECTED here and must not count. ' +
+        'Answer "true" only when the TASK ITSELF changed: different subject, different deliverable, or a different goal than the original request.',
       criteria: {
-        true: 'the task scope or success criteria are different from the original request',
-        false: 'the task scope and success criteria are unchanged',
+        true: 'the task itself is different from the original request',
+        false: 'the task itself is unchanged (added framing is fine)',
       },
     },
   ]

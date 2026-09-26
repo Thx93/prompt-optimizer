@@ -56,6 +56,16 @@ function buildEnv(rowConfig) {
   };
   put('PROMPT_OPTIMIZER_PROVIDER', rowConfig.provider);
   put('PROMPT_OPTIMIZER_VALIDATION', rowConfig.validation);
+  put('PROMPT_OPTIMIZER_MODE', rowConfig.mode);
+  put('PROMPT_OPTIMIZER_DECISION_HINTS', rowConfig.decisionHints);
+  if (rowConfig.rewrite && typeof rowConfig.rewrite === 'object') {
+    put('PROMPT_OPTIMIZER_REWRITE_BASE_URL', rowConfig.rewrite.baseUrl);
+    put('PROMPT_OPTIMIZER_REWRITE_MODEL', rowConfig.rewrite.model);
+    put('PROMPT_OPTIMIZER_REWRITE_ENDPOINT', rowConfig.rewrite.endpoint);
+    put('PROMPT_OPTIMIZER_REWRITE_TEMPERATURE', rowConfig.rewrite.temperature);
+    put('PROMPT_OPTIMIZER_REWRITE_MAX_TOKENS', rowConfig.rewrite.maxTokens);
+    put('PROMPT_OPTIMIZER_REWRITE_TIMEOUT_MS', rowConfig.rewrite.timeoutMs);
+  }
   put('PROMPT_OPTIMIZER_TIMEOUT_MS', rowConfig.timeoutMs);
   put('PROMPT_OPTIMIZER_RETRIES', rowConfig.retries);
   put('PROMPT_OPTIMIZER_MAX_STATE_CHARS', rowConfig.maxStateChars);
@@ -198,6 +208,10 @@ function apply(ctx, config = {}) {
           const secret = await resolveSecret(ctx, credentialsRef);
           if (secret) decisionConfig.jev.apiKey = secret;
         }
+        if (decisionConfig.mode === 'engineer' && !decisionConfig.rewrite.apiKey) {
+          const secret = await resolveSecret(ctx, credentialsRef);
+          if (secret) decisionConfig.rewrite.apiKey = secret;
+        }
         if (decisionConfig.provider === 'laya' && !decisionConfig.laya.apiKey) {
           const secret = await resolveSecret(ctx, 'LAYA_API_KEY');
           if (secret) decisionConfig.laya.apiKey = secret;
@@ -221,8 +235,26 @@ function apply(ctx, config = {}) {
 
     const { core, decisionConfig } = await runtime();
     const provider = core.createDecisionMakerProvider(decisionConfig);
+    // Generative writer (Prompt-Engineer mode): DeepSeek V4.1 Flash by default,
+    // steered and gated by the decision provider (JEV/Laya).
+    const rewriter =
+      decisionConfig.mode === 'engineer'
+        ? new core.ChatPromptRewriter({
+            baseUrl: decisionConfig.rewrite.baseUrl,
+            endpoint: decisionConfig.rewrite.endpoint,
+            apiKey: decisionConfig.rewrite.apiKey,
+            model: decisionConfig.rewrite.model,
+            temperature: decisionConfig.rewrite.temperature,
+            maxTokens: decisionConfig.rewrite.maxTokens,
+            timeoutMs: decisionConfig.rewrite.timeoutMs,
+            retries: decisionConfig.retries,
+          })
+        : undefined;
     const optimizer = new core.PromptOptimizer({
       provider,
+      rewriter,
+      mode: decisionConfig.mode,
+      decisionHints: decisionConfig.decisionHints,
       validation: decisionConfig.validation,
       maxStateChars: decisionConfig.maxStateChars,
     });

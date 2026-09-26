@@ -248,3 +248,128 @@ describe('PromptOptimizer', () => {
     vi.unstubAllGlobals()
   })
 })
+
+/** Fake generative rewriter for engineer-mode pipeline tests. */
+class FakeRewriter {
+  readonly id = 'prompt-engineer'
+  readonly model = 'deepseek-v4.1-flash-fake'
+  hintsSeen?: string
+
+  constructor(
+    private readonly output: Partial<{
+      optimized_prompt: string
+      changes: string[]
+      assumptions: string[]
+      warnings: string[]
+      clarifying_questions: string[]
+    }> = {},
+    private readonly options: { failWith?: Error } = {}
+  ) {}
+
+  async rewrite(request: { request: { prompt: string }; hints?: string }) {
+    this.hintsSeen = request.hints
+    if (this.options.failWith) throw this.options.failWith
+    return {
+      optimized_prompt: this.output.optimized_prompt ?? 'You are an expert.\n\nDo the thing well.',
+      changes: this.output.changes ?? ['Added a role'],
+      assumptions: this.output.assumptions ?? [],
+      warnings: this.output.warnings ?? [],
+      clarifying_questions: this.output.clarifying_questions ?? [],
+      model: this.model,
+      latencyMs: 5,
+    }
+  }
+}
+
+describe('PromptOptimizer — engineer mode (Prompt-Engineer rewrite + decision partnership)', () => {
+  it('returns the engineered rewrite with mode metadata', async () => {
+    const provider = new FakeProvider(positiveAnswers)
+    const rewriter = new FakeRewriter({
+      optimized_prompt: 'You are a haiku master.\n\nWrite a haiku about winter mornings.',
+      changes: ['Added a role', 'Preserved the task'],
+      assumptions: ['Assumed an English response'],
+      clarifying_questions: ['How long should it be?'],
+    })
+    const optimizer = new PromptOptimizer({
+      provider,
+      rewriter,
+      mode: 'engineer',
+      decisionHints: false,
+      validation: 'basic',
+    })
+    const result = await optimizer.optimize({ prompt: 'write a haiku' })
+
+    expect(result.optimized_prompt).toContain('haiku master')
+    expect(result.meta?.mode).toBe('engineer')
+    expect(result.meta?.provider).toBe('prompt-engineer')
+    expect(result.meta?.model).toBe('deepseek-v4.1-flash-fake')
+    expect(result.clarifying_questions).toEqual(['How long should it be?'])
+    expect(result.assumptions).toContain('Assumed an English response')
+  })
+
+  it('steers the rewrite with decision-layer hints when enabled', async () => {
+    const provider = new FakeProvider(positiveAnswers)
+    const rewriter = new FakeRewriter()
+    const optimizer = new PromptOptimizer({
+      provider,
+      rewriter,
+      mode: 'engineer',
+      decisionHints: true,
+      validation: 'off',
+    })
+    await optimizer.optimize({ prompt: 'write a haiku' })
+
+    expect(rewriter.hintsSeen).toContain('task type: generation')
+    expect(rewriter.hintsSeen).toContain('specificity:')
+  })
+
+  it('runs calibrated gates over the rewrite in strict mode', async () => {
+    const provider = new FakeProvider(positiveAnswers)
+    const optimizer = new PromptOptimizer({
+      provider,
+      rewriter: new FakeRewriter(),
+      mode: 'engineer',
+      decisionHints: false,
+      validation: 'strict',
+    })
+    await optimizer.optimize({ prompt: 'write a haiku' })
+    // hints skipped (off): the only extra decision call is the gate pair
+    expect(provider.lastRequest?.questions.map((q) => q.key)).toEqual(['intent_preserved', 'no_new_requirements'])
+  })
+
+  it('falls back to deterministic composition when the rewrite fails', async () => {
+    const provider = new FakeProvider(positiveAnswers)
+    const optimizer = new PromptOptimizer({
+      provider,
+      rewriter: new FakeRewriter({}, { failWith: new Error('chat endpoint down') }),
+      mode: 'engineer',
+      decisionHints: false,
+      validation: 'basic',
+    })
+    const result = await optimizer.optimize({ prompt: 'write a haiku' })
+
+    expect(result.meta?.mode).toBe('compose')
+    expect(result.optimized_prompt).toContain('write a haiku') // composed form
+    expect(result.warnings.some((w) => w.includes('generative rewrite was not used'))).toBe(true)
+    expect(result.warnings.some((w) => w.includes('chat endpoint down'))).toBe(true)
+  })
+
+  it('falls back to composition when decision gates reject the rewrite', async () => {
+    const answers = {
+      ...positiveAnswers,
+      intent_preserved: { type: 'noul' as const, noul: 0.1 },
+    }
+    const provider = new FakeProvider(answers)
+    const optimizer = new PromptOptimizer({
+      provider,
+      rewriter: new FakeRewriter({ optimized_prompt: 'Something completely different.' }),
+      mode: 'engineer',
+      decisionHints: false,
+      validation: 'strict',
+    })
+    const result = await optimizer.optimize({ prompt: 'write a haiku' })
+
+    expect(result.meta?.mode).toBe('compose')
+    expect(result.warnings.some((w) => w.includes('decision gates rejected the rewrite'))).toBe(true)
+  })
+})

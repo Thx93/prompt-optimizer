@@ -97,7 +97,7 @@ describe('optimizer → decision-maker integration (mocked endpoints)', () => {
     const fetchMock = vi.fn().mockImplementation(async () => respondWith(JEV_REAL_SHAPE))
     vi.stubGlobal('fetch', fetchMock)
 
-    const optimizer = createPromptOptimizer({ JEV_API_KEY: 'k', PROMPT_OPTIMIZER_PROVIDER: 'jev' })
+    const optimizer = createPromptOptimizer({ JEV_API_KEY: 'k', PROMPT_OPTIMIZER_PROVIDER: 'jev', PROMPT_OPTIMIZER_MODE: 'compose' })
     const result = await optimizer.optimize({
       prompt: 'Help me write an article about renewable energy.',
       context: 'For a company blog aimed at non-technical managers.',
@@ -132,6 +132,7 @@ describe('optimizer → decision-maker integration (mocked endpoints)', () => {
 
     const optimizer = createPromptOptimizer({
       PROMPT_OPTIMIZER_PROVIDER: 'laya',
+      PROMPT_OPTIMIZER_MODE: 'compose',
       LAYA_BASE_URL: 'http://127.0.0.1:8787',
     })
     const result = await optimizer.optimize({
@@ -160,7 +161,7 @@ describe('optimizer → decision-maker integration (mocked endpoints)', () => {
         })
       )
     )
-    const optimizer = createPromptOptimizer({ JEV_API_KEY: 'wrong' })
+    const optimizer = createPromptOptimizer({ JEV_API_KEY: 'wrong', PROMPT_OPTIMIZER_MODE: 'compose' })
     const error = await optimizer
       .optimize({ prompt: 'hello' })
       .catch((e) => e as PromptOptimizationError)
@@ -172,7 +173,7 @@ describe('optimizer → decision-maker integration (mocked endpoints)', () => {
     const fetchMock = vi.fn().mockImplementation(async () => respondWith(JEV_REAL_SHAPE))
     vi.stubGlobal('fetch', fetchMock)
 
-    const optimizer = createPromptOptimizer({ JEV_API_KEY: 'k' })
+    const optimizer = createPromptOptimizer({ JEV_API_KEY: 'k', PROMPT_OPTIMIZER_MODE: 'compose' })
     await optimizer.optimize({
       prompt: 'Summarize the attached report.',
       instructions: 'The output will be read by auditors; favor precision over brevity.',
@@ -180,5 +181,97 @@ describe('optimizer → decision-maker integration (mocked endpoints)', () => {
 
     const requestBody = JSON.parse(fetchMock.mock.calls[0][1].body as string)
     expect(requestBody.state).toContain('The output will be read by auditors; favor precision over brevity.')
+  })
+})
+
+describe('engineer mode: DeepSeek rewrite + JEV/Laya partnership (mocked endpoints)', () => {
+  beforeEach(() => vi.unstubAllGlobals())
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('runs the full partnership: hints → DeepSeek rewrite → decision gates', async () => {
+    const chatResponse = {
+      model: 'deepseek/deepseek-v4.1-flash',
+      choices: [
+        {
+          message: {
+            content: JSON.stringify({
+              optimized_prompt:
+                'You are a business writer.\n\nWrite a 700-word report about renewable energy for company managers. Open with a short introduction.',
+              changes: ['Added role and audience', 'Turned the vague request into a concrete deliverable'],
+              assumptions: ['Assumed ~700 words', 'Assumed a general-management audience'],
+              warnings: [],
+              clarifying_questions: ['Which regions should the report focus on?'],
+            }),
+          },
+        },
+      ],
+      usage: { prompt_tokens: 200, completion_tokens: 180 },
+    }
+    const calls: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(async (url: string) => {
+        calls.push(String(url))
+        if (String(url).includes('/chat/completions')) {
+          return new Response(JSON.stringify(chatResponse), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          })
+        }
+        return respondWith(JEV_REAL_SHAPE)
+      })
+    )
+
+    const optimizer = createPromptOptimizer({
+      PROMPT_OPTIMIZER_PROVIDER: 'jev',
+      PROMPT_OPTIMIZER_MODE: 'engineer',
+      JEV_API_KEY: 'k',
+      COMMANDCODE_API_KEY: 'k',
+    })
+    const result = await optimizer.optimize({
+      prompt: 'write a report about ai',
+      constraints: ['under 800 words'],
+    })
+
+    // partnership order: decision hints → chat rewrite → decision gates
+    expect(calls.filter((u) => u.includes('/systemone')).length).toBe(2)
+    expect(calls.filter((u) => u.includes('/chat/completions')).length).toBe(1)
+
+    // the engineered prompt is the deliverable — fluent, standalone, not a scaffold
+    expect(result.meta?.mode).toBe('engineer')
+    expect(result.meta?.provider).toBe('prompt-engineer')
+    expect(result.meta?.model).toBe('deepseek/deepseek-v4.1-flash')
+    expect(result.optimized_prompt).toContain('business writer')
+    expect(result.optimized_prompt).not.toContain('## Request')
+    expect(result.assumptions).toContain('Assumed ~700 words')
+    expect(result.clarifying_questions).toEqual(['Which regions should the report focus on?'])
+    expect(result.changes.length).toBeGreaterThan(0)
+  })
+
+  it('falls back to composition when the chat model is unreachable', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(async (url: string) => {
+        if (String(url).includes('/chat/completions')) {
+          return new Response(JSON.stringify({ error: { message: 'down' } }), {
+            status: 503,
+            headers: { 'content-type': 'application/json' },
+          })
+        }
+        return respondWith(JEV_REAL_SHAPE)
+      })
+    )
+
+    const optimizer = createPromptOptimizer({
+      PROMPT_OPTIMIZER_PROVIDER: 'jev',
+      PROMPT_OPTIMIZER_MODE: 'engineer',
+      JEV_API_KEY: 'k',
+      PROMPT_OPTIMIZER_RETRIES: '0',
+    })
+    const result = await optimizer.optimize({ prompt: 'write a report about ai' })
+
+    expect(result.meta?.mode).toBe('compose')
+    expect(result.warnings.some((w) => w.includes('generative rewrite was not used'))).toBe(true)
+    expect(result.optimized_prompt).toContain('write a report about ai')
   })
 })

@@ -307,3 +307,36 @@ test('command handler rejects empty input', async () => {
   assert.equal(result.kind, 'error');
   assert.match(result.text, /provide the prompt/);
 });
+
+test('engineer mode: button path returns the DeepSeek-engineered prompt', async () => {
+  process.env.PROMPT_OPTIMIZER_MODE = 'engineer';
+  const chatResponse = {
+    model: 'deepseek/deepseek-v4.1-flash',
+    choices: [
+      {
+        message: {
+          content: JSON.stringify({
+            optimized_prompt: 'ROLE: You are a writer.\n\nTASK: Write about solar power.',
+            changes: ['Added a role'],
+            assumptions: ['Assumed a general audience'],
+            warnings: [],
+            clarifying_questions: [],
+          }),
+        },
+      },
+    ],
+  };
+  stubFetch((url, _init, body) => {
+    if (String(url).includes('/chat/completions')) return jsonResponse(200, chatResponse);
+    return jsonResponse(200, JEV_SHAPED_RESPONSE); // decision hints + gates
+  });
+
+  const harness = makeHarness();
+  apply(harness.ctx, {});
+  const value = await harness.registered.execute({ prompt: 'write about solar power' }, {});
+
+  assert.equal(value.provider, 'prompt-engineer');
+  assert.equal(value.model, 'deepseek/deepseek-v4.1-flash');
+  assert.ok(value.optimized_prompt.startsWith('ROLE:'));
+  assert.deepEqual(value.assumptions, ['Assumed a general audience']);
+});

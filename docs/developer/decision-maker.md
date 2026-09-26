@@ -18,6 +18,37 @@ prompt-optimizer and exposes it to the DeepSeek Harness as the
 - Laya (convaiinnovations/laya) runs locally via `laya-serve`:
   `POST http://127.0.0.1:8787/v1/systemone` (Jev-compatible envelope).
 
+## 0. Enhancement style: the "Prompt Engineer" pipeline (default)
+
+The default output style clones the behavior of the popular ChatGPT custom GPT
+**"Prompt Engineer" by upscaile.com** (chatgpt.com/g/g-5XtVuRE8Y — "Generate
+superior ChatGPT prompts or improve your existing prompts"): a complete,
+standalone, engineered prompt (Role / Context / Objective / Requirements /
+Audience / Tone / Output format / Examples / Success criteria / Clarification
+behavior), plus a short explanation of the changes, surfaced assumptions,
+warnings and optional clarifying questions. The exact GPT instructions are not
+public anywhere (verified — see
+[prompt-engineer-research.md](prompt-engineer-research.md) for the evidence and
+the published templates this reconstruction is based on).
+
+**DeepSeek V4.1 Flash writes; JEV/Laya decide.** The generative rewrite runs on
+`deepseek/deepseek-v4.1-flash` (Command Code chat API) in partnership with the
+decision layer:
+
+1. **Steer** — JEV/Laya classifies the request (intent / vagueness / tone) and
+   the calibrated hints steer the rewrite (`PROMPT_OPTIMIZER_DECISION_HINTS=1`)
+2. **Write** — DeepSeek V4.1 Flash produces the engineered prompt as strict
+   JSON (`optimized_prompt`, `changes`, `assumptions`, `warnings`,
+   `clarifying_questions`), zod-validated
+3. **Gate** — JEV/Laya verifies the rewrite keeps the task and intent intact;
+   a task-changing rewrite is rejected and the deterministic composition
+   fallback is applied (with the reason in `warnings`)
+
+Select the writer with `PROMPT_OPTIMIZER_REWRITE_MODEL` (any OpenAI-compatible
+chat model), the decision layer with `PROMPT_OPTIMIZER_PROVIDER=jev|laya`, and
+`PROMPT_OPTIMIZER_MODE=compose` restores the deterministic decision-driven
+assembly as the primary behavior.
+
 ## 1. Architecture overview
 
 ```
@@ -89,6 +120,15 @@ credential store — never from files in this repository.
 | `PROMPT_OPTIMIZER_RETRIES` | `2` | bounded retries (0–10) on 429/5xx/network |
 | `PROMPT_OPTIMIZER_TIMEOUT_MS` | — | global timeout override (ms) |
 | `PROMPT_OPTIMIZER_MAX_STATE_CHARS` | — | optional state-size cap override |
+| `PROMPT_OPTIMIZER_MODE` | `engineer` | `engineer` (Prompt-Engineer rewrite) or `compose` (deterministic assembly) |
+| `PROMPT_OPTIMIZER_DECISION_HINTS` | `1` | steer the rewrite with JEV/Laya classification |
+| `PROMPT_OPTIMIZER_REWRITE_MODEL` | `deepseek/deepseek-v4.1-flash` | generative writer (any OpenAI-compatible chat model) |
+| `PROMPT_OPTIMIZER_REWRITE_BASE_URL` | `https://api.commandcode.ai/provider/v1` | writer API base |
+| `PROMPT_OPTIMIZER_REWRITE_API_KEY` | — | writer key (falls back to `COMMANDCODE_API_KEY`) |
+| `PROMPT_OPTIMIZER_REWRITE_ENDPOINT` | — | full endpoint override (default `{base}/chat/completions`) |
+| `PROMPT_OPTIMIZER_REWRITE_TEMPERATURE` | `0.5` | writer temperature (0–2) |
+| `PROMPT_OPTIMIZER_REWRITE_MAX_TOKENS` | `2400` | writer output cap |
+| `PROMPT_OPTIMIZER_REWRITE_TIMEOUT_MS` | `60000` | writer request timeout |
 | `JEV_API_KEY` | — | JEV key (falls back to `COMMANDCODE_API_KEY`, then `TYPESAFE_API_KEY`) |
 | `JEV_BASE_URL` | `https://api.commandcode.ai/provider/v1` | Command Code provider API |
 | `JEV_MODEL` | `typesafe/jev` | model id (TypeSafe native: `jev-latest`) |

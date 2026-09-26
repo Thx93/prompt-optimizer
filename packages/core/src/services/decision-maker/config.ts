@@ -10,6 +10,7 @@ import { DecisionMakerConfigError } from './errors'
 
 export type ProviderKind = 'jev' | 'laya'
 export type ValidationMode = 'strict' | 'basic' | 'off'
+export type OptimizationMode = 'engineer' | 'compose'
 
 export interface ProviderEndpointConfig {
   baseUrl: string
@@ -20,10 +21,26 @@ export interface ProviderEndpointConfig {
   timeoutMs: number
 }
 
+/** Generative rewrite endpoint (OpenAI-compatible chat completions). */
+export interface RewriteEndpointConfig {
+  baseUrl: string
+  endpoint?: string
+  apiKey?: string
+  model: string
+  temperature: number
+  maxTokens: number
+  timeoutMs: number
+}
+
 export interface DecisionMakerConfig {
   provider: ProviderKind
   retries: number
   validation: ValidationMode
+  /** engineer: generative Prompt-Engineer rewrite (default); compose: decision-driven assembly. */
+  mode: OptimizationMode
+  /** Feed calibrated decision hints into the rewrite prompt. */
+  decisionHints: boolean
+  rewrite: RewriteEndpointConfig
   /** Optional cap applied to the rendered state before dispatch. */
   maxStateChars?: number
   jev: ProviderEndpointConfig
@@ -34,6 +51,18 @@ const DEFAULTS = {
   provider: 'jev' as ProviderKind,
   retries: 2,
   validation: 'strict' as ValidationMode,
+  mode: 'engineer' as OptimizationMode,
+  // Partnership mode: the decision layer (JEV/Laya) classifies and steers the
+  // rewrite, then gates the result.
+  decisionHints: true,
+  rewrite: {
+    // Command Code provider API chat completions (OpenAI-compatible).
+    baseUrl: 'https://api.commandcode.ai/provider/v1',
+    model: 'deepseek/deepseek-v4.1-flash',
+    temperature: 0.5,
+    maxTokens: 2_400,
+    timeoutMs: 60_000,
+  },
   jev: {
     // Command Code provider API (JEV lives at {base}/systemone).
     baseUrl: 'https://api.commandcode.ai/provider/v1',
@@ -103,24 +132,58 @@ function parseValidationMode(raw: string | undefined): ValidationMode {
   )
 }
 
+function parseOptimizationMode(raw: string | undefined): OptimizationMode {
+  const value = (raw ?? DEFAULTS.mode).trim().toLowerCase()
+  if (value === 'engineer' || value === 'compose') return value
+  throw new DecisionMakerConfigError(
+    `PROMPT_OPTIMIZER_MODE must be "engineer" or "compose" (got ${JSON.stringify(raw)})`
+  )
+}
+
+function parseTemperature(raw: string | undefined, fallback: number, name: string): number {
+  if (raw === undefined || raw === '') return fallback
+  const value = Number(raw)
+  if (!Number.isFinite(value) || value < 0 || value > 2) {
+    throw new DecisionMakerConfigError(`${name} must be a number between 0 and 2 (got ${JSON.stringify(raw)})`)
+  }
+  return value
+}
+
+function parseFlag(raw: string | undefined, fallback: boolean, name: string): boolean {
+  if (raw === undefined || raw === '') return fallback
+  const value = raw.trim().toLowerCase()
+  if (value === '1' || value === 'true' || value === 'yes' || value === 'on') return true
+  if (value === '0' || value === 'false' || value === 'no' || value === 'off') return false
+  throw new DecisionMakerConfigError(`${name} must be a boolean flag (got ${JSON.stringify(raw)})`)
+}
+
 export type EnvLike = Record<string, string | undefined>
 
 /**
  * Build the decision-maker configuration from environment variables.
  *
- *   PROMPT_OPTIMIZER_PROVIDER      jev | laya            (default: jev)
- *   PROMPT_OPTIMIZER_RETRIES       0..10                 (default: 2)
- *   PROMPT_OPTIMIZER_VALIDATION    strict|basic|off      (default: strict)
- *   PROMPT_OPTIMIZER_TIMEOUT_MS    global timeout override
- *   PROMPT_OPTIMIZER_MAX_STATE_CHARS  optional state cap override
+ *   PROMPT_OPTIMIZER_MODE           engineer|compose      (default: engineer)
+ *   PROMPT_OPTIMIZER_PROVIDER       jev | laya            (default: jev)
+ *   PROMPT_OPTIMIZER_RETRIES        0..10                 (default: 2)
+ *   PROMPT_OPTIMIZER_VALIDATION     strict|basic|off      (default: strict)
+ *   PROMPT_OPTIMIZER_DECISION_HINTS 0|1                   (default: 1)
+ *   PROMPT_OPTIMIZER_TIMEOUT_MS     global timeout override
+ *   PROMPT_OPTIMIZER_MAX_STATE_CHARS   optional state cap override
+ *   PROMPT_OPTIMIZER_REWRITE_BASE_URL  (default: https://api.commandcode.ai/provider/v1)
+ *   PROMPT_OPTIMIZER_REWRITE_MODEL     (default: deepseek/deepseek-v4.1-flash)
+ *   PROMPT_OPTIMIZER_REWRITE_API_KEY   (falls back to COMMANDCODE_API_KEY)
+ *   PROMPT_OPTIMIZER_REWRITE_ENDPOINT  optional full endpoint override
+ *   PROMPT_OPTIMIZER_REWRITE_TEMPERATURE (0..2, default 0.5)
+ *   PROMPT_OPTIMIZER_REWRITE_MAX_TOKENS  (default: 2400)
+ *   PROMPT_OPTIMIZER_REWRITE_TIMEOUT_MS  (default: 60000)
  *   JEV_API_KEY / COMMANDCODE_API_KEY / TYPESAFE_API_KEY (first set wins)
- *   JEV_BASE_URL                   (default: https://api.commandcode.ai/provider/v1)
- *   JEV_MODEL                      (default: typesafe/jev; TypeSafe native: jev-latest)
- *   JEV_ENDPOINT                   optional full endpoint override
- *   LAYA_BASE_URL                  (default: http://127.0.0.1:8787)
- *   LAYA_MODEL                     (default: english)
- *   LAYA_API_KEY                   optional (laya-serve auth, off by default)
- *   LAYA_ENDPOINT                  optional full endpoint override
+ *   JEV_BASE_URL                    (default: https://api.commandcode.ai/provider/v1)
+ *   JEV_MODEL                       (default: typesafe/jev; TypeSafe native: jev-latest)
+ *   JEV_ENDPOINT                    optional full endpoint override
+ *   LAYA_BASE_URL                   (default: http://127.0.0.1:8787)
+ *   LAYA_MODEL                      (default: english)
+ *   LAYA_API_KEY                    optional (laya-serve auth, off by default)
+ *   LAYA_ENDPOINT                   optional full endpoint override
  */
 export function loadDecisionMakerConfig(env: EnvLike = process.env): DecisionMakerConfig {
   const provider = parseProviderKind(env.PROMPT_OPTIMIZER_PROVIDER)
@@ -128,6 +191,36 @@ export function loadDecisionMakerConfig(env: EnvLike = process.env): DecisionMak
   const maxStateChars = env.PROMPT_OPTIMIZER_MAX_STATE_CHARS
     ? parsePositiveInt(env.PROMPT_OPTIMIZER_MAX_STATE_CHARS, 0, 'PROMPT_OPTIMIZER_MAX_STATE_CHARS')
     : undefined
+
+  const rewrite: RewriteEndpointConfig = {
+    baseUrl: validateBaseUrl(
+      env.PROMPT_OPTIMIZER_REWRITE_BASE_URL || DEFAULTS.rewrite.baseUrl,
+      'PROMPT_OPTIMIZER_REWRITE_BASE_URL'
+    ),
+    model: (env.PROMPT_OPTIMIZER_REWRITE_MODEL || DEFAULTS.rewrite.model).trim(),
+    apiKey: env.PROMPT_OPTIMIZER_REWRITE_API_KEY || env.COMMANDCODE_API_KEY || undefined,
+    temperature: parseTemperature(
+      env.PROMPT_OPTIMIZER_REWRITE_TEMPERATURE,
+      DEFAULTS.rewrite.temperature,
+      'PROMPT_OPTIMIZER_REWRITE_TEMPERATURE'
+    ),
+    maxTokens: parsePositiveInt(
+      env.PROMPT_OPTIMIZER_REWRITE_MAX_TOKENS,
+      DEFAULTS.rewrite.maxTokens,
+      'PROMPT_OPTIMIZER_REWRITE_MAX_TOKENS'
+    ),
+    timeoutMs:
+      globalTimeout ||
+      parsePositiveInt(
+        env.PROMPT_OPTIMIZER_REWRITE_TIMEOUT_MS,
+        DEFAULTS.rewrite.timeoutMs,
+        'PROMPT_OPTIMIZER_REWRITE_TIMEOUT_MS'
+      ),
+  }
+  if (env.PROMPT_OPTIMIZER_REWRITE_ENDPOINT) {
+    rewrite.endpoint = env.PROMPT_OPTIMIZER_REWRITE_ENDPOINT.trim()
+  }
+  if (!rewrite.model) throw new DecisionMakerConfigError('PROMPT_OPTIMIZER_REWRITE_MODEL must not be empty')
 
   const jevApiKey = env.JEV_API_KEY || env.COMMANDCODE_API_KEY || env.TYPESAFE_API_KEY || undefined
   const jev: ProviderEndpointConfig = {
@@ -153,6 +246,9 @@ export function loadDecisionMakerConfig(env: EnvLike = process.env): DecisionMak
     provider,
     retries: parseNonNegativeInt(env.PROMPT_OPTIMIZER_RETRIES, DEFAULTS.retries, 'PROMPT_OPTIMIZER_RETRIES'),
     validation: parseValidationMode(env.PROMPT_OPTIMIZER_VALIDATION),
+    mode: parseOptimizationMode(env.PROMPT_OPTIMIZER_MODE),
+    decisionHints: parseFlag(env.PROMPT_OPTIMIZER_DECISION_HINTS, DEFAULTS.decisionHints, 'PROMPT_OPTIMIZER_DECISION_HINTS'),
+    rewrite,
     maxStateChars,
     jev,
     laya,
@@ -165,7 +261,17 @@ export function redactConfig(config: DecisionMakerConfig): Record<string, unknow
     provider: config.provider,
     retries: config.retries,
     validation: config.validation,
+    mode: config.mode,
+    decisionHints: config.decisionHints,
     maxStateChars: config.maxStateChars ?? null,
+    rewrite: {
+      baseUrl: config.rewrite.baseUrl,
+      model: config.rewrite.model,
+      temperature: config.rewrite.temperature,
+      maxTokens: config.rewrite.maxTokens,
+      timeoutMs: config.rewrite.timeoutMs,
+      apiKey: config.rewrite.apiKey ? '***' : null,
+    },
     jev: {
       baseUrl: config.jev.baseUrl,
       model: config.jev.model,

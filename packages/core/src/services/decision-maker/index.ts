@@ -28,3 +28,4 @@ export {
   type SystemOneProviderOptions,
 } from './providers'
 export { SystemOneDecisionProvider } from './providers/base'
+export { callChatCompletion, type ChatMessage, type ChatCompletionRequest, type ChatCompletionResult } from './chat-client'
