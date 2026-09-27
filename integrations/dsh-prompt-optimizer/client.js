@@ -23,6 +23,7 @@ window.__ModuleLoader__.load({
 
     const EN = {
       title: 'Optimize prompt',
+      successShort: 'Prompt optimized ✓',
       empty: 'Type a prompt first, then optimize.',
       busy: 'Optimizing…',
       success: 'Prompt optimized ({changes} changes · {assumptions} assumptions · {warnings} warnings)',
@@ -32,6 +33,7 @@ window.__ModuleLoader__.load({
     };
     const ZH = {
       title: '优化提示词',
+      successShort: '提示词已优化 ✓',
       empty: '请先输入提示词，再点击优化。',
       busy: '优化中…',
       success: '提示词已优化（{changes} 项修改 · {assumptions} 项假设 · {warnings} 项提醒）',
@@ -46,6 +48,12 @@ window.__ModuleLoader__.load({
       );
     }
 
+    /** Composer notices must stay one short line: the banner grows with text. */
+    function clipNotice(text) {
+      const oneLine = String(text == null ? '' : text).replace(/\s+/g, ' ').trim();
+      return oneLine.length > 160 ? oneLine.slice(0, 157) + '…' : oneLine;
+    }
+
     /** Locale translate with an English fallback if the slot supplies none. */
     function translator(t) {
       return (key, vars) => {
@@ -55,6 +63,25 @@ window.__ModuleLoader__.load({
         }
         return fill(EN[key] !== undefined ? EN[key] : key, vars);
       };
+    }
+
+    function CheckIcon() {
+      return h(
+        'svg',
+        {
+          width: 16,
+          height: 16,
+          viewBox: '0 0 24 24',
+          fill: 'none',
+          stroke: 'var(--dsw-alias-state-success-primary)',
+          strokeWidth: 2.2,
+          strokeLinecap: 'round',
+          strokeLinejoin: 'round',
+          'aria-hidden': true,
+          style: { display: 'block' },
+        },
+        h('path', { d: 'M20 6 9 17l-5-5' })
+      );
     }
 
     function WandIcon({ busy }) {
@@ -80,6 +107,7 @@ window.__ModuleLoader__.load({
     function OptimizeButton({ sessionId, t }) {
       const tr = translator(t);
       const [busy, setBusy] = React.useState(false);
+      const [done, setDone] = React.useState(false);
       const [hover, setHover] = React.useState(false);
 
       const onClick = async () => {
@@ -122,7 +150,7 @@ window.__ModuleLoader__.load({
               envelope && envelope.error
                 ? `${envelope.error.code || 'remote'}: ${envelope.error.message || ''}`
                 : '';
-            input.notify('error', detail ? `${tr('error')} — ${detail}` : tr('error'));
+            input.notify('error', clipNotice(detail ? `${tr('error')} — ${detail}` : tr('error')));
             return;
           }
           const execution = envelope.value;
@@ -139,8 +167,9 @@ window.__ModuleLoader__.load({
           try {
             value = JSON.parse(result.text);
           } catch (error) {
-            // Human-readable fallback (e.g. slash-command path): show as notice.
-            input.notify('info', result.text);
+            // Non-JSON success (unexpected from the button path): never dump
+            // long text into the composer banner — clip to one short line.
+            input.notify('info', clipNotice(result.text));
             return;
           }
           if (!value || typeof value.optimized_prompt !== 'string') {
@@ -152,26 +181,25 @@ window.__ModuleLoader__.load({
           } catch (error) {
             input.notify(
               'error',
-              `${tr('error')}: optimized prompt could not be written to the composer — ${error && error.message ? error.message : ''}`
+              clipNotice(
+                `${tr('error')}: optimized prompt could not be written to the composer — ${error && error.message ? error.message : ''}`
+              )
             );
             return;
           }
-          const parts = [
-            tr('success', {
-              changes: (value.changes || []).length,
-              assumptions: (value.assumptions || []).length,
-              warnings: (value.warnings || []).length,
-            }),
-          ];
-          if (Array.isArray(value.assumptions) && value.assumptions.length > 0) {
-            parts.push(`${tr('assumed')}: ${value.assumptions.join(' ')}`);
-          }
-          if (Array.isArray(value.warnings) && value.warnings.length > 0) {
-            parts.push(`${tr('warnings')}: ${value.warnings.join(' ')}`);
-          }
-          input.notify('info', parts.join(' · '));
+          // Intentionally NO composer notice here: the notice banner grows
+          // with its text and was covering the chat. Assumptions are disclosed
+          // inside the engineered prompt itself; the full change/assumption/
+          // warning summary stays available via the /optimize-prompt command,
+          // which renders as a normal chat flow node. Feedback is the brief
+          // check mark on the button.
+          setDone(true);
+          setTimeout(() => setDone(false), 1500);
         } catch (error) {
-          input.notify('error', `${tr('error')}: ${error && error.message ? error.message : ''}`);
+          input.notify(
+            'error',
+            clipNotice(`${tr('error')}: ${error && error.message ? error.message : ''}`)
+          );
         } finally {
           setBusy(false);
           try {
@@ -186,12 +214,13 @@ window.__ModuleLoader__.load({
         'button',
         {
           type: 'button',
-          title: busy ? tr('busy') : tr('title'),
-          'aria-label': busy ? tr('busy') : tr('title'),
+          title: done ? tr('successShort') : busy ? tr('busy') : tr('title'),
+          'aria-label': done ? tr('successShort') : busy ? tr('busy') : tr('title'),
           disabled: busy,
           onClick,
           onMouseEnter: () => setHover(true),
           onMouseLeave: () => setHover(false),
+          'data-state': done ? 'done' : undefined,
           style: {
             display: 'inline-flex',
             alignItems: 'center',
@@ -208,7 +237,7 @@ window.__ModuleLoader__.load({
             transition: 'color 120ms ease, background 120ms ease',
           },
         },
-        h(WandIcon, { busy })
+        done ? h(CheckIcon) : h(WandIcon, { busy })
       );
     }
 
